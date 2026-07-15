@@ -48,7 +48,7 @@ const TOOL_DEFINITIONS: any = {
   }
 }
 
-export const singleTurnExecutor = async (data: EvalData)=> {
+export const singleTurnExecutorWithMocks = async (data: EvalData)=> {
   // Implementation goes here
   const messages = buildMessages(data)
 
