@@ -9,9 +9,14 @@
     "dist"
   ],
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch --env-file=.env src/index.ts",
     "start": "tsx --env-file=.env src/index.ts",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "gate": "bash .githooks/quality-gate.sh",
     "eval": "npx lmnr eval",
     "eval:file-tools": "npx lmnr eval evals/file-tools.eval.ts",
     "eval:shell-tools": "npx lmnr eval evals/shell-tools.eval.ts",
