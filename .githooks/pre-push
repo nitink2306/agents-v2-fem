@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Pre-push quality gate. Enabled via `npm install` (see the "prepare" script
+# in package.json, which runs `git config core.hooksPath .githooks`).
+#
+# Gated on push rather than commit on purpose: local commits stay fast and
+# WIP-friendly, but nothing leaves the machine without passing lint/format
+# (on the diff) and a full typecheck. See quality-gate.sh for what runs.
+set -uo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+"$script_dir/quality-gate.sh"
+status=$?
+
+if [ "$status" -ne 0 ]; then
+  echo ""
+  echo "Push blocked by the quality gate."
+  echo "Emergency bypass (avoid unless you know exactly why): git push --no-verify"
+  exit "$status"
+fi
+
+exit 0
