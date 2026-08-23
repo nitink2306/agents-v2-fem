@@ -107,6 +107,8 @@ npm run eval:agent              # evals/agent-multiturn.eval.ts
 
 `evals/executors.ts` wraps the agent/tools under test, `evals/evaluators.ts` scores the results, and `evals/data/*.json` holds the fixture inputs/expectations. `evals/mocks/tools.ts` provides mocked tool implementations so evals don't hit real file/shell/network side effects.
 
+For a code-level walkthrough of how eval data, executors, evaluators, mocks, and Laminar suite entry points fit together, see [`evals/evals.md`](evals/evals.md).
+
 ## Linting / formatting
 
 Formatting and linting are handled by [Biome](https://biomejs.dev/) (`biome.json` — tab indentation, double quotes):
