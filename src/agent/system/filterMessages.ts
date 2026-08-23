@@ -5,39 +5,40 @@ import type { ModelMessage } from "ai";
  * cause issues when passed back to subsequent API calls.
  */
 export const filterCompatibleMessages = (
-  messages: ModelMessage[],
+	messages: ModelMessage[],
 ): ModelMessage[] => {
-  return messages.filter((msg) => {
-    // Keep user and system messages
-    if (msg.role === "user" || msg.role === "system") {
-      return true;
-    }
+	return messages.filter((msg) => {
+		// System instructions are supplied separately through streamText's
+		// `instructions` option, so history only retains user messages here.
+		if (msg.role === "user") {
+			return true;
+		}
 
-    // Keep assistant messages that have text content
-    if (msg.role === "assistant") {
-      const content = msg.content;
-      if (typeof content === "string" && content.trim()) {
-        return true;
-      }
-      // Check for array content with text parts
-      if (Array.isArray(content)) {
-        const hasTextContent = content.some((part: unknown) => {
-          if (typeof part === "string" && part.trim()) return true;
-          if (typeof part === "object" && part !== null && "text" in part) {
-            const textPart = part as { text?: string };
-            return textPart.text && textPart.text.trim();
-          }
-          return false;
-        });
-        return hasTextContent;
-      }
-    }
+		// Keep assistant messages that have text content
+		if (msg.role === "assistant") {
+			const content = msg.content;
+			if (typeof content === "string" && content.trim()) {
+				return true;
+			}
+			// Check for array content with text parts
+			if (Array.isArray(content)) {
+				const hasTextContent = content.some((part: unknown) => {
+					if (typeof part === "string" && part.trim()) return true;
+					if (typeof part === "object" && part !== null && "text" in part) {
+						const textPart = part as { text?: string };
+						return textPart.text?.trim();
+					}
+					return false;
+				});
+				return hasTextContent;
+			}
+		}
 
-    // Keep tool messages
-    if (msg.role === "tool") {
-      return true;
-    }
+		// Keep tool messages
+		if (msg.role === "tool") {
+			return true;
+		}
 
-    return false;
-  });
+		return false;
+	});
 };

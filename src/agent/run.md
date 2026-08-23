@@ -6,6 +6,35 @@ model decides to call along the way. Everything else in the app (`src/ui/App.tsx
 in the terminal UI) is a thin shell around calling `runAgent()` once per user
 turn and rendering whatever it reports back via callbacks.
 
+## Start here: one user turn in plain language
+
+When someone sends a message, `runAgent()` does not simply ask the model for
+one string. It builds a conversation, lets the model respond, and keeps going
+only when the model asks the application to use a tool.
+
+1. Pass the system prompt as instructions, alongside the earlier messages and
+   the new user message.
+2. Stream the model's response so the UI can show text and tool activity as it
+   arrives.
+3. If the response is a final answer, save it and finish.
+4. If the response asks for tools, run them, add their results to the
+   conversation, and ask the model what to do next.
+
+The function returns the updated conversation so the next user turn can
+continue where this one left off.
+
+### The three things to keep separate
+
+| Thing | What it is for | Where it appears |
+| --- | --- | --- |
+| `messages` | The durable conversation sent back to the model on each round. | Built in Section 4; updated in Sections 10–11. |
+| `fullResponse` | The text shown to the user during this one call to `runAgent()`. | Started in Section 5; completed in Section 12. |
+| `callbacks` | Live UI updates while the function is still running. | Fired while reading chunks and tool activity. |
+
+This distinction prevents a common misunderstanding: streamed text updates the
+UI, while `messages` preserves the structured transcript the model needs for a
+future turn.
+
 At a high level, it implements the **ReAct pattern** (Reason + Act), which is
 the standard shape almost every "agent" you've heard of is built on:
 
@@ -19,7 +48,7 @@ loop:
 
 ```mermaid
 flowchart TD
-    A[runAgent called] --> B[Build messages: system + history + user]
+    A[runAgent called] --> B[Build instructions + messages: history + user]
     B --> C{while true}
     C --> D[streamText: call the model]
     D --> E[for await chunk of fullStream]
@@ -44,6 +73,16 @@ The rest of this document walks the file top to bottom, section by section,
 explaining every concept it touches — not just what the code does, but *why*
 it's written this way.
 
+### Choose your reading path
+
+- **I want the big picture:** read this section, then Sections 4, 5, 10, 11,
+  and 12.
+- **I am debugging unexpected tool behavior:** start with Sections 7, 10, and
+  11. Those show how a tool request is captured, recognized, and executed.
+- **I am debugging the terminal UI:** focus on Sections 3, 7, and 12. They
+  explain when callbacks deliver live updates and completion.
+- **I need the implementation details:** read the numbered sections in order.
+
 ---
 
 ## 1. Imports
@@ -51,7 +90,7 @@ it's written this way.
 ```ts
 import { streamText, type ModelMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
-import {getTracer, Laminar} from "@lmnr-ai/lmnr"
+import { Laminar } from "@lmnr-ai/lmnr";
 import { tools } from "./tools/index.ts";
 import { SYSTEM_PROMPT } from "./system/prompt.ts";
 
@@ -70,7 +109,7 @@ The inline `type` keyword (`type ModelMessage`) tells the compiler "erase this o
 
 **Provider-agnostic SDK design.** `ai` (the Vercel AI SDK) and `@ai-sdk/openai` are deliberately two separate packages. `streamText`, `generateText`, and friends in the `ai` package don't know anything about OpenAI, Anthropic, or any specific vendor — they just expect to be handed a "language model" object that conforms to a common interface. `openai("gpt-5-mini")` is a **factory function** from the provider package that produces exactly that kind of object. This is why swapping providers in an app like this is usually a one-line change (swap the import and the factory call) rather than a rewrite: the calling code (`streamText({ model, messages, tools, ... })`) is identical regardless of which vendor is behind `model`.
 
-**Laminar.** `@lmnr-ai/lmnr` is an observability/tracing SDK purpose-built for LLM applications — think OpenTelemetry, but with concepts like "this span is one call to the model" or "this span is one tool execution" built in, so traces show up in a UI meaningfully rather than as generic HTTP spans. `getTracer()` returns a tracer instance used later to tag a specific `streamText` call; `Laminar` itself is the SDK's top-level control object (used below to `initialize` it).
+**Laminar.** `@lmnr-ai/lmnr` is an observability/tracing SDK purpose-built for LLM applications — think OpenTelemetry, but with concepts like "this span is one call to the model" or "this span is one tool execution" built in, so traces show up in a UI meaningfully rather than as generic HTTP spans. `Laminar` is the SDK's top-level control object, used below to initialize tracing for the process.
 
 **Explicit `.ts` extensions.** `./tools/index.ts`, `./system/prompt.ts`, `../types.ts`, etc. all include the file extension. This project runs on Node's native TypeScript support / `tsx`, which — unlike bundler-based setups such as Webpack or Vite — does *not* resolve extensionless imports for you. `import { tools } from "./tools/index"` (no `.ts`) would fail to resolve at runtime here.
 
@@ -117,17 +156,31 @@ export async function runAgent(
 ```ts
 const workingHistory = filterCompatibleMessages(conversationHistory);
 const messages: ModelMessage[] = [
-  {role: 'system', content: SYSTEM_PROMPT},
   ...workingHistory, // conversation so far fitered to only include compatible messages
   {role: 'user', content: userMessage},
 ];
 ```
 
-**Why the whole history gets resent.** LLM chat APIs are **stateless** between calls — there is no server-side "session" the model remembers. Every single API call must include the entire conversation transcript so far, from the system prompt through every prior user/assistant/tool exchange, or the model has no memory of anything that happened before. `runAgent` reconstructing `messages` from scratch on every invocation (system prompt + prior history + new user message) is not an optimization choice, it's the *only* way chat continuity works with these APIs.
+**Why the whole history gets resent.** LLM chat APIs are **stateless** between
+calls — there is no server-side "session" the model remembers. Every API call
+needs the relevant prior user/assistant/tool exchange, or the model has no
+memory of it. `runAgent` also sends `SYSTEM_PROMPT` as `instructions` on each
+call. Reconstructing those inputs for every request is not an optimization
+choice; it is how chat continuity works with these APIs.
 
-**The spread operator (`...workingHistory`).** Inside an array literal, `...someArray` unpacks each element of that array into the new array *at that position*, rather than nesting it as a single element. `[a, ...[b, c], d]` produces `[a, b, c, d]`, not `[a, [b, c], d]`. Here it means: take every message from the filtered prior history and lay them out in order, between the system message and the new user message.
+**The spread operator (`...workingHistory`).** Inside an array literal,
+`...someArray` unpacks each element of that array into the new array *at that
+position*, rather than nesting it as a single element. `[a, ...[b, c], d]`
+produces `[a, b, c, d]`, not `[a, [b, c], d]`. Here it means: take every
+message from the filtered prior history and lay them out in order before the
+new user message.
 
-**Message ordering and roles.** This follows the OpenAI-style chat message convention that most providers converged on: a `system` message (sets behavior/instructions) conventionally comes first, followed by the alternating `user`/`assistant` (and, when tools are involved, `tool`) turns in chronological order, with the newest `user` message last. Getting this order wrong, or omitting the system message, changes how the model behaves — it's not just cosmetic.
+**Instructions, ordering, and roles.** The agent passes `SYSTEM_PROMPT` through
+`streamText`'s `instructions` option rather than adding a `system` message to
+`messages`. The message array therefore contains chronological
+`user`/`assistant` turns (and `tool` turns when tools are involved), with the
+newest `user` message last. The instructions and ordering both affect model
+behavior; neither is cosmetic.
 
 **`filterCompatibleMessages`.** Defined elsewhere (`./system/filterMessages.ts`), but worth knowing it exists: it strips messages from the incoming history that would make the array invalid to resend — for example, a dangling assistant tool-call message with no matching `tool` result message would produce a malformed request. This is a sanitization step applied before folding history back in.
 
@@ -140,6 +193,7 @@ let fullResponse = "";
 while (true) {
   const result = streamText({
     model: openai(MODEL_NAME),
+    instructions: SYSTEM_PROMPT,
     messages,
     tools,
     experimental_telemetry: {
@@ -163,7 +217,7 @@ This is what makes token-by-token UI streaming possible: you can start reacting 
 
 **`tools` passed into `streamText`.** This is what turns a plain chat completion into an agentic call: giving the model a list of available tools (name, description, parameter schema) lets it, per response, choose to either produce text or request a tool invocation (what's commonly called "function calling" or "tool use" under the hood). Without passing `tools` here, the model has no way to ever produce a `tool-calls` finish reason.
 
-**`experimental_telemetry`.** Wires this specific `streamText` call into the Laminar tracer obtained from `getTracer()`, so each model call becomes an inspectable span in Laminar's UI — useful for debugging exactly what was sent/received on any given turn.
+**`experimental_telemetry`.** Enables telemetry for this `streamText` call. Laminar uses the process-level configuration established by `Laminar.initialize`, so model calls can be inspected in its UI when tracing is configured.
 
 ---
 
@@ -325,7 +379,28 @@ return messages
 
 Once the outer `while (true)` loop finally `break`s — via either the error-fallback path (§9) or the final-answer path (§10) — `onComplete` fires exactly once, telling the caller "streaming is fully done, here is the final assistant text," which is what the UI uses to stop showing a "typing" indicator and commit the finished message.
 
-**Why the entire `messages` array is returned, not just the newest reply.** The return type is `Promise<ModelMessage[]>`, and the function hands back the *whole*, fully mutated conversation — system prompt, original history, every intermediate assistant/tool exchange from any tool calls that happened, and the final answer — not merely the latest message. That's because `runAgent` is stateless between calls in the same way the underlying LLM API is: the caller (`App.tsx`) takes this returned array and stores it as `conversationHistory`, to be passed back in as the starting point for the *next* call to `runAgent`. The function isn't just answering one message — it's handing back the authoritative, up-to-date transcript.
+**Why the entire `messages` array is returned, not just the newest reply.**
+The return type is `Promise<ModelMessage[]>`, and the function hands back the
+whole, fully mutated conversation — original history, every intermediate
+assistant/tool exchange from any tool calls, and the final answer — not merely
+the latest message. The system prompt is sent separately as `instructions` on
+each model call. The caller (`App.tsx`) stores this returned array as
+`conversationHistory` and passes it back into the next `runAgent` call. The
+function is not just answering one message; it returns the up-to-date
+transcript.
+
+### Every way the loop ends
+
+The loop is intentionally open-ended, but it has two explicit exits:
+
+| What happened? | What `runAgent()` does | Result for the caller |
+| --- | --- | --- |
+| Streaming failed before any usable text arrived. | Sends a short fallback message and breaks. | `onComplete` receives the fallback text. |
+| The model finished without a usable tool request. | Adds the assistant response to `messages` and breaks. | `onComplete` receives the accumulated answer and the updated transcript is returned. |
+
+A valid tool request is not an exit: its assistant message and tool result are
+added to `messages`, then the next loop iteration begins. This is the only
+path that repeats.
 
 ---
 

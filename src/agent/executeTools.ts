@@ -1,23 +1,28 @@
-import {tools} from "./tools/index.ts"
+import { tools } from "./tools/index.ts";
 export type Toolname = keyof typeof tools;
 
-export const executeTool = async (name: string, args: any) => {
-    const tool = tools[name as Toolname];
+export const executeTool = async (
+	name: string,
+	args: Record<string, unknown>,
+) => {
+	const tool = tools[name as Toolname];
 
-    if (!tool) {
-        return "Unknown tool. this does not exist"
-    }
+	if (!tool) {
+		return "Unknown tool. this does not exist";
+	}
 
-    const execute = tool.execute;
-    
-    if (!execute) {
-        return `This is not a registered tool`
-    }
+	const execute = tool.execute;
 
-    const result = await execute(args, {
-        toolCallId: "",
-        messages: []
-    })
+	if (!execute) {
+		return `This is not a registered tool`;
+	}
 
-    return String(result);
-}
+	// The tool is chosen dynamically; its schema validates the corresponding input.
+	const result = await execute(args as never, {
+		toolCallId: "",
+		messages: [],
+		context: {},
+	});
+
+	return String(result);
+};
