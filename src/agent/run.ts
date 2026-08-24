@@ -2,6 +2,14 @@ import { openai } from "@ai-sdk/openai";
 import { Laminar } from "@lmnr-ai/lmnr";
 import { type ModelMessage, streamText } from "ai";
 import type { AgentCallbacks, ToolCallInfo } from "../types.ts";
+import {
+	calculateUsagePercentage,
+	compactConversation,
+	DEFAULT_THRESHOLD,
+	estimateMessagesTokens,
+	getModelLimits,
+	isOverThreshold,
+} from "./context/index.ts";
 import { executeTool } from "./executeTools.ts";
 import { filterCompatibleMessages } from "./system/filterMessages.ts";
 import { SYSTEM_PROMPT } from "./system/prompt.ts";
@@ -18,11 +26,28 @@ export async function runAgent(
 	conversationHistory: ModelMessage[],
 	callbacks: AgentCallbacks,
 ): Promise<ModelMessage[]> {
+	const modelLimits = getModelLimits(MODEL_NAME);
+
 	const workingHistory = filterCompatibleMessages(conversationHistory);
-	const messages: ModelMessage[] = [
+	let messages: ModelMessage[] = [
 		...workingHistory, // conversation so far fitered to only include compatible messages
 		{ role: "user", content: userMessage },
 	];
+
+	const precheckTokens = estimateMessagesTokens(messages);
+
+	if (
+		isOverThreshold(
+			precheckTokens.total,
+			modelLimits.contextWindow,
+			DEFAULT_THRESHOLD,
+		)
+	) {
+		messages = [
+			...(await compactConversation(workingHistory, MODEL_NAME)),
+			{ role: "user", content: userMessage },
+		];
+	}
 
 	let fullResponse = "";
 	while (true) {
@@ -37,6 +62,23 @@ export async function runAgent(
 			},
 		});
 
+		const reportTokenUsage = () => {
+			if (callbacks.onTokenUsage) {
+				const usage = estimateMessagesTokens(messages);
+				callbacks.onTokenUsage({
+					inputTokens: usage.input,
+					outputTokens: usage.output,
+					totalTokens: usage.total,
+					contextWindow: modelLimits.contextWindow,
+					threshold: DEFAULT_THRESHOLD,
+					percentage: calculateUsagePercentage(
+						usage.total,
+						modelLimits.contextWindow,
+					),
+				});
+			}
+		};
+
 		const toolCalls: ToolCallInfo[] = [];
 		let currentText = "";
 		let streamError: Error | null = null;
@@ -50,11 +92,13 @@ export async function runAgent(
 
 				if (chunk.type === "tool-call") {
 					const input = "input" in chunk ? chunk.input : {};
-					toolCalls.push({
-						toolCallId: chunk.toolCallId,
-						toolName: chunk.toolName,
-						args: input as Record<string, unknown>,
-					});
+					if (chunk.providerExecuted !== true) {
+						toolCalls.push({
+							toolCallId: chunk.toolCallId,
+							toolName: chunk.toolName,
+							args: input as Record<string, unknown>,
+						});
+					}
 					callbacks.onToolCallStart(chunk.toolName, input);
 				}
 			}
@@ -82,6 +126,7 @@ export async function runAgent(
 		if (finishReason !== "tool-calls" || toolCalls.length === 0) {
 			const responseMessages = await result.response;
 			messages.push(...responseMessages.messages);
+			reportTokenUsage();
 			break;
 		}
 
@@ -105,6 +150,8 @@ export async function runAgent(
 					},
 				],
 			});
+
+			reportTokenUsage();
 		}
 	}
 	callbacks.onComplete(fullResponse);

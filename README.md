@@ -57,6 +57,7 @@ src/
   agent/
     run.ts                  # the agent loop itself (see run.md for a full walkthrough)
     run.md                  # line-by-line explainer of run.ts
+    capabilities.md         # context compaction and provider-tool architecture
     executeTools.ts          # looks up a tool by name and executes it
     system/
       prompt.ts              # the system prompt
@@ -96,6 +97,10 @@ filesystem tool contracts, and their safety boundaries, see
 [`src/agent/tools/tools.md`](src/agent/tools/tools.md).
 
 The `notes/` directory documents tools introduced in later lessons (file system read/write/list, web search, a shell tool with human-in-the-loop approval) that get layered on as the course progresses — check `src/agent/tools/index.ts` for what's actually wired in on this branch at any given time.
+
+For a detailed explanation of context budgets, conversation compaction, token
+reporting, and provider-native web search, see
+[`src/agent/capabilities.md`](src/agent/capabilities.md).
 
 ## In-progress pieces
 

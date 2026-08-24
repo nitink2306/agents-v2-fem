@@ -1,21 +1,30 @@
-import { generateText, type ModelMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
+import { generateText, type ModelMessage } from "ai";
 import { extractMessageText } from "./tokenEstimator.ts";
 
-const SUMMARIZATION_PROMPT = `
+const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Your task is to create a concise summary of the conversation so far that preserves:
+
+1. Key decisions and conclusions reached
+2. Important context and facts mentioned
+3. Any pending tasks or questions
+4. The overall goal of the conversation
+
+Be concise but complete. The summary should allow the conversation to continue naturally.
+
+Conversation to summarize:
 `;
 
 /**
  * Format messages array as readable text for summarization
  */
 function messagesToText(messages: ModelMessage[]): string {
-  return messages
-    .map((msg) => {
-      const role = msg.role.toUpperCase();
-      const content = extractMessageText(msg);
-      return `[${role}]: ${content}`;
-    })
-    .join("\n\n");
+	return messages
+		.map((msg) => {
+			const role = msg.role.toUpperCase();
+			const content = extractMessageText(msg);
+			return `[${role}]: ${content}`;
+		})
+		.join("\n\n");
 }
 
 /**
@@ -29,9 +38,36 @@ function messagesToText(messages: ModelMessage[]): string {
  * The system prompt should be prepended by the caller.
  */
 export async function compactConversation(
-  messages: ModelMessage[],
-  model: string = "gpt-5-mini",
-): Promise<any> {
-  // Filter out system messages - they're handled separately
-  //
+	messages: ModelMessage[],
+	model: string = "gpt-5-mini",
+): Promise<ModelMessage[]> {
+	// Filter out system messages - they're handled separately
+	const conversationMessages = messages.filter((m) => m.role !== "system");
+
+	if (conversationMessages.length === 0) {
+		return [];
+	}
+
+	// Parse out the JSON content or arbitrary text from the messages and format it for summarization
+	const conversationText = messagesToText(conversationMessages);
+
+	const { text: summary } = await generateText({
+		model: openai(model),
+		prompt: SUMMARIZATION_PROMPT + conversationText,
+	});
+
+	// Create compacted messages
+	const compactedMessages: ModelMessage[] = [
+		{
+			role: "user",
+			content: `[CONVERSATION SUMMARY]\nThe following is a summary of our conversation so far:\n\n${summary}\n\nPlease continue from where we left off.`,
+		},
+		{
+			role: "assistant",
+			content:
+				"I understand. I've reviewed the summary of our conversation and I'm ready to continue. How can I help you next?",
+		},
+	];
+
+	return compactedMessages;
 }
