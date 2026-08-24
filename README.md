@@ -63,7 +63,9 @@ src/
       filterMessages.ts       # strips history messages that would break a resend
     tools/
       index.ts                # tool registry passed to the model
-      dateTime.ts              # example tool: returns the current date/time
+      dateTime.ts             # returns the current date/time
+      file.ts                 # read, write, list, and delete file tools
+      tools.md                # deep dive into tool definitions and execution
     context/
       tokenEstimator.ts        # rough token counting for messages
       modelLimits.ts            # per-model context window / threshold config
@@ -84,6 +86,14 @@ Tools live in `src/agent/tools/` and are exported from `src/agent/tools/index.ts
 Currently registered:
 
 - **`dateTime`** — returns the current ISO timestamp. No arguments.
+- **`readFile`** — reads a UTF-8 file at `path`.
+- **`writeFile`** — writes `content` to `path`, creating parent directories.
+- **`listFiles`** — lists the immediate entries in `directory` (default: `.`).
+- **`deleteFile`** — permanently removes the file at `path`.
+
+For a code-level walkthrough of the tool registry, the execution path, the
+filesystem tool contracts, and their safety boundaries, see
+[`src/agent/tools/tools.md`](src/agent/tools/tools.md).
 
 The `notes/` directory documents tools introduced in later lessons (file system read/write/list, web search, a shell tool with human-in-the-loop approval) that get layered on as the course progresses — check `src/agent/tools/index.ts` for what's actually wired in on this branch at any given time.
 
